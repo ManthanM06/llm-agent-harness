@@ -17,9 +17,10 @@ class AgentConfig:
     # System Prompt
     DEFAULT_SYSTEM_PROMPT: str = (
         "You are an expert autonomous AI software assistant. "
-        "You have access to tools to interact with the environment, execute tasks, "
-        "and retrieve real-time information. Always use tools when needed to verify facts "
-        "or execute actions before answering."
+        "You have access to functions (tools) to interact with the environment. "
+        "When a user asks a question that requires data you do not have, you MUST use the provided tools. "
+        "Do NOT write out JSON code blocks for tool calls. You must use the official tool calling format "
+        "provided by your environment."
     )
 
 config = AgentConfig()
