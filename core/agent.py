@@ -14,31 +14,54 @@ class AgentEngine:
 
     def _extract_manual_json_tools(self, text: str) -> list:
         """
-        Fallback parser: Sometimes small models output raw JSON code blocks instead
-        of using the API's tool_calls array. This attempts to extract them.
+        Fallback parser: Sometimes small models output raw JSON code blocks or tags
+        instead of using the API's tool_calls array. This attempts to extract them.
         """
         tools_found = []
-        # Find everything between ```json and ```
-        json_blocks = re.findall(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
-        for block in json_blocks:
+        if not text:
+            return tools_found
+
+        decoder = json.JSONDecoder()
+        pos = 0
+        while pos < len(text):
+            idx_obj = text.find("{", pos)
+            idx_arr = text.find("[", pos)
+            
+            candidates = [i for i in [idx_obj, idx_arr] if i != -1]
+            if not candidates:
+                break
+            idx = min(candidates)
+
             try:
-                data = json.loads(block)
-                if "name" in data and "arguments" in data:
-                    tools_found.append({
-                        "function": {
-                            "name": data["name"],
-                            "arguments": data["arguments"]
-                        }
-                    })
-            except json.JSONDecodeError:
-                continue
+                parsed, end_pos = decoder.raw_decode(text[idx:])
+                pos = idx + end_pos
+                
+                items = parsed if isinstance(parsed, list) else [parsed]
+                for item in items:
+                    if isinstance(item, dict) and "name" in item:
+                        args = item.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                pass
+                        tools_found.append({
+                            "function": {
+                                "name": item["name"],
+                                "arguments": args if isinstance(args, dict) else {}
+                            }
+                        })
+            except Exception:
+                pos = idx + 1
+
         return tools_found
 
     def chat(self, user_prompt: str) -> Generator[str, None, None]:
         self.memory.add_message("user", user_prompt)
 
         loop_count = 0          
-        max_loops = 5   
+        max_loops = 5
+        last_tool_signature = None
 
         while True:
             if loop_count >= max_loops:
@@ -59,19 +82,61 @@ class AgentEngine:
             )
 
             message = response.get("message", {})
-            content = message.get("content", "")
+            content = message.get("content", "") or ""
             
             raw_api_calls = message.get("tool_calls")
-            api_tool_calls = raw_api_calls if raw_api_calls is not None else []
+            api_tool_calls = []
+            if raw_api_calls:
+                for call in raw_api_calls:
+                    if hasattr(call, "function"):
+                        name = call.function.name
+                        args = call.function.arguments
+                        if hasattr(args, "model_dump"):
+                            args = args.model_dump()
+                        elif isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                pass
+                    elif isinstance(call, dict) and "function" in call:
+                        name = call["function"]["name"]
+                        args = call["function"].get("arguments", {})
+                    else:
+                        continue
+                    api_tool_calls.append({
+                        "function": {
+                            "name": name,
+                            "arguments": args if isinstance(args, dict) else {}
+                        }
+                    })
+
             manual_tool_calls = self._extract_manual_json_tools(content)
-            
-            all_tools_to_run = api_tool_calls + manual_tool_calls
+            all_tools_to_run = api_tool_calls if api_tool_calls else manual_tool_calls
 
             if all_tools_to_run:
+                # Cycle detection safeguard
+                try:
+                    current_sig = [
+                        (tc["function"]["name"], json.dumps(tc["function"]["arguments"], sort_keys=True))
+                        for tc in all_tools_to_run
+                    ]
+                except Exception:
+                    current_sig = None
+
+                if current_sig is not None and current_sig == last_tool_signature:
+                    # Model repeated the exact same tool calls without synthesizing
+                    nudge_msg = "You have already executed these tools and received their results. Please synthesize the final answer for the user."
+                    self.memory.add_message("user", nudge_msg)
+                    loop_count += 1
+                    continue
+
+                last_tool_signature = current_sig
+
+                # Store assistant tool invocation in memory
                 self.memory.add_message(
                     role="assistant", 
-                    content=content if manual_tool_calls else "", 
-                    tool_calls=api_tool_calls if api_tool_calls else None
+                    content="", 
+                    tool_calls=all_tools_to_run
                 )
 
                 for tool_call in all_tools_to_run:
@@ -83,7 +148,7 @@ class AgentEngine:
                     tool_result = registry.execute(func_name, arguments)
                     
                     formatted_result = f"Result of {func_name}: {str(tool_result)}"
-                    self.memory.add_message("tool", formatted_result)
+                    self.memory.add_message("tool", formatted_result, tool_name=func_name)
                 
                 loop_count += 1  
                 continue
@@ -91,7 +156,7 @@ class AgentEngine:
             else:
                 self.memory.add_message("assistant", content)
 
-                # TODO := add token-to-token streaming
+                # Stream response chunks to caller
                 chunk_size = 10
                 for i in range(0, len(content), chunk_size):
                     yield content[i:i+chunk_size]

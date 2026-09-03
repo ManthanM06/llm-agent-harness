@@ -22,13 +22,29 @@ class ToolRegistry:
     def get_all_tools(self) -> List[Callable]:
         return list(self._tools.values())
 
-    def execute(self, name:str, agruments:Dict[str, Any]) -> str:
+    def execute(self, name: str, arguments: Dict[str, Any] | str | None = None) -> str:
         tool = self.get_tools(name)
         if not tool:
             return f"Error: Tool '{name}' not found in registry."
 
+        # Normalize arguments
+        if arguments is None:
+            kwargs = {}
+        elif isinstance(arguments, str):
+            import json
+            try:
+                kwargs = json.loads(arguments)
+                if not isinstance(kwargs, dict):
+                    kwargs = {}
+            except Exception as e:
+                return f"Error parsing arguments for '{name}': {str(e)}"
+        elif isinstance(arguments, dict):
+            kwargs = arguments
+        else:
+            kwargs = {}
+
         try:
-            result = tool(**agruments)
+            result = tool(**kwargs)
             return str(result)
         except Exception as e:
             return f"Error executing '{name}': {str(e)}"

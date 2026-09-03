@@ -19,9 +19,9 @@ class ChatMemory:
 
     def add_message(self, role: str, content: str, **kwargs) -> None:
         msg = {"role": role, "content": content}
-        
-        if "tool_calls" in kwargs and kwargs["tool_calls"]:
-            msg["tool_calls"] = kwargs["tool_calls"]
+        for k, v in kwargs.items():
+            if v is not None:
+                msg[k] = v
             
         self.messages.append(msg)
         self._enforce_sliding_window()
