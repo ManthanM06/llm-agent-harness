@@ -6,6 +6,7 @@ from typing import Generator
 from core.config import config
 from core.memory import ChatMemory
 from tools.registry import registry
+from skills.registry import skill_registry
 
 class AgentEngine:
     def __init__(self):
@@ -57,7 +58,24 @@ class AgentEngine:
         return tools_found
 
     def chat(self, user_prompt: str) -> Generator[str, None, None]:
-        self.memory.add_message("user", user_prompt)
+        skill, content = skill_registry.match_skill(user_prompt)
+
+        if skill:
+            if not content:
+                # Skill was called with no query, provide helpful usage prompt
+                usage_msg = (
+                    f"**Skill Activated: {skill.name}** (`{skill.trigger}`)\n\n"
+                    f"{skill.description}\n\n"
+                    f"**Usage:** `{skill.trigger} <question or problem description>`"
+                )
+                yield usage_msg
+                return
+
+            print(f"\n[Agent Engine] 🎯 Skill Activated: {skill.name} ({skill.trigger})")
+            self.memory.add_message("system", skill.get_system_instructions())
+            self.memory.add_message("user", content)
+        else:
+            self.memory.add_message("user", user_prompt)
 
         loop_count = 0          
         max_loops = 5
