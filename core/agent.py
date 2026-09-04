@@ -2,16 +2,28 @@
 import ollama
 import json 
 import re   
-from typing import Generator
+from typing import Generator, Optional, Callable, Dict, Any
 from core.config import config
 from core.memory import ChatMemory
 from tools.registry import registry
 from skills.registry import skill_registry
 
 class AgentEngine:
-    def __init__(self):
+    def __init__(
+        self,
+        permission_handler: Optional[Callable[[str, Dict[str, Any]], bool]] = None,
+        on_skill_activated: Optional[Callable[[Any], None]] = None,
+        on_tool_call: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_tool_result: Optional[Callable[[str, str], None]] = None,
+    ):
         self.memory = ChatMemory()
         self.available_tools = registry.get_all_tools()
+        self.on_skill_activated = on_skill_activated
+        self.on_tool_call = on_tool_call
+        self.on_tool_result = on_tool_result
+
+        if permission_handler is not None:
+            registry.set_permission_handler(permission_handler)
 
     def _extract_manual_json_tools(self, text: str) -> list:
         """
@@ -71,7 +83,10 @@ class AgentEngine:
                 yield usage_msg
                 return
 
-            print(f"\n[Agent Engine] 🎯 Skill Activated: {skill.name} ({skill.trigger})")
+            if self.on_skill_activated:
+                self.on_skill_activated(skill)
+            else:
+                print(f"\n[Agent Engine] 🎯 Skill Activated: {skill.name} ({skill.trigger})")
             self.memory.add_message("system", skill.get_system_instructions())
             self.memory.add_message("user", content)
         else:
@@ -88,6 +103,7 @@ class AgentEngine:
                 yield final_msg
                 break
 
+            self.available_tools = registry.get_all_tools()
             response = ollama.chat(
                 model=config.MODEL_NAME,
                 messages=self.memory.get_messages(),
@@ -161,9 +177,15 @@ class AgentEngine:
                     func_name = tool_call["function"]["name"]
                     arguments = tool_call["function"]["arguments"]
                     
-                    print(f"\n[Agent Engine] 🛠️  Executing tool: {func_name}({arguments})")
+                    if self.on_tool_call:
+                        self.on_tool_call(func_name, arguments)
+                    else:
+                        print(f"\n[Agent Engine] 🛠️  Executing tool: {func_name}({arguments})")
                     
                     tool_result = registry.execute(func_name, arguments)
+                    
+                    if self.on_tool_result:
+                        self.on_tool_result(func_name, str(tool_result))
                     
                     formatted_result = f"Result of {func_name}: {str(tool_result)}"
                     self.memory.add_message("tool", formatted_result, tool_name=func_name)

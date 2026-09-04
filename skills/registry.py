@@ -5,13 +5,23 @@ Manages registration, lookup, and triggering of skills.
 from typing import Dict, Optional, Tuple, List
 from skills.base import BaseSkill
 from skills.leetcode import LeetCodeSkill
+from skills.debug import DebugSkill
+from skills.refactor import RefactorSkill
+from skills.testgen import TestGenSkill
+from skills.explain import ExplainSkill
+from skills.docstring import DocstringSkill
 
 class SkillRegistry:
     def __init__(self):
         self._skills: Dict[str, BaseSkill] = {}
         
-        # Register built-in skills
+        # Register built-in coding skills
         self.register(LeetCodeSkill())
+        self.register(DebugSkill())
+        self.register(RefactorSkill())
+        self.register(TestGenSkill())
+        self.register(ExplainSkill())
+        self.register(DocstringSkill())
 
     def register(self, skill: BaseSkill) -> None:
         """Register a new skill by its trigger."""

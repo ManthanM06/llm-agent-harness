@@ -19,7 +19,7 @@ class AgentConfig:
         "You are an expert autonomous AI software assistant. "
         "You have access to tools to interact with the environment.\n"
         "Rules:\n"
-        "1. When answering questions that require environment information (such as checking files or current time), "
+        "1. When answering questions that require environment information or manipulating files (such as listing files, reading files, writing files, or checking current time), "
         "you MUST call the corresponding tools. NEVER guess or hallucinate environment data.\n"
         "2. If multiple pieces of information are needed, call all relevant tools before finalizing your answer.\n"
         "3. Once all necessary tool results are received, synthesize a clear, factual answer based strictly on the tool results.\n"

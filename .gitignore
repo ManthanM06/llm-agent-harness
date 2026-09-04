@@ -12,3 +12,9 @@ sessions/*.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Build & packaging
+*.egg-info/
+build/
+dist/
+.test_sandbox_tmp*/

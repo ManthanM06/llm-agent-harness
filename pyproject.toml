@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-agent-harness"
+version = "0.1.0"
+description = "Autonomous AI Software Agent Harness with Rich CLI and Extensible Skills"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ollama>=0.4.0",
+    "rich>=13.7.0",
+    "pydantic>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "prompt_toolkit>=3.0.0"
+]
+
+[project.scripts]
+broo = "interfaces.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "skills*", "tools*", "interfaces*"]
