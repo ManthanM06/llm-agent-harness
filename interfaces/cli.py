@@ -1,12 +1,15 @@
 """
 interfaces/cli.py
 Interactive CLI application ('broo') for the LLM Agent Harness using Rich and Prompt Toolkit.
+Includes token-by-token streaming, dedicated code boxes with top-right [📋 Copy] button,
+and clipboard management.
 """
 
 import os
 import sys
+import re
 import argparse
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -18,8 +21,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.markdown import Markdown
 from rich.text import Text
+from rich.syntax import Syntax
 from rich.prompt import Confirm
 from rich.align import Align
+from rich.cells import cell_len
 from rich import box
 
 from core.agent import AgentEngine
@@ -47,9 +52,30 @@ PROMPT_STYLE = Style.from_dict({
     "scrollbar.button": "bg:#6272a4",
 })
 
+def copy_to_clipboard(text: str) -> bool:
+    """Copies text to the system clipboard using pyperclip and terminal OSC 52."""
+    copied = False
+    try:
+        import pyperclip
+        pyperclip.copy(text)
+        copied = True
+    except Exception:
+        pass
+
+    try:
+        import base64
+        b64 = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+        sys.stdout.write(f"\033]52;c;{b64}\007")
+        sys.stdout.flush()
+        copied = True
+    except Exception:
+        pass
+
+    return copied
+
 class BrooSlashCompleter(Completer):
     """
-    Autocompletes slash commands (/help, /skills, /tools, /clear, /exit, etc.)
+    Autocompletes slash commands (/help, /skills, /tools, /clear, /copy, /exit, etc.)
     and coding skills (/leetcode, /debug, etc.) when the user types '/'.
     Supports arrow key navigation and display metadata.
     """
@@ -58,6 +84,7 @@ class BrooSlashCompleter(Completer):
             "/help": "Show commands manual & usage guide",
             "/skills": "List all active coding & agent skills",
             "/tools": "List available tools & permission requirements",
+            "/copy": "Copy code block from latest response to clipboard",
             "/clear": "Clear conversation memory & terminal screen",
             "/exit": "Exit the Broo CLI",
             "/quit": "Exit the Broo CLI",
@@ -68,7 +95,6 @@ class BrooSlashCompleter(Completer):
         if text.startswith("/"):
             word = text.strip().split()[0] if text.strip() else "/"
             
-            # Combine builtins and dynamically registered skills
             candidates: Dict[str, str] = dict(self.builtin_commands)
             for skill in skill_registry.get_all_skills():
                 desc_short = (skill.description or "")[:45]
@@ -124,6 +150,7 @@ def show_help() -> None:
     table.add_row("/help", "Show this help message")
     table.add_row("/skills", "List all active coding and agent skills")
     table.add_row("/tools", "List available tools and permission requirements")
+    table.add_row("/copy [n]", "Copy code block #n (or latest) to system clipboard")
     table.add_row("/clear", "Clear conversation memory and reset session")
     table.add_row("/exit, /quit", "Exit the Broo CLI")
     table.add_row("<any text>", "Chat with the autonomous agent or ask questions")
@@ -215,6 +242,7 @@ class BrooCLI:
             on_tool_call=self._on_tool_call,
             on_tool_result=self._on_tool_result
         )
+        self.last_code_blocks: List[str] = []
 
     def _on_skill_activated(self, skill: Any) -> None:
         console.print(f"\n[bold green]🎯 Skill Activated:[/bold green] [bold white]{skill.name}[/bold white] ([cyan]{skill.trigger}[/cyan])")
@@ -229,6 +257,57 @@ class BrooCLI:
             trimmed = trimmed[:120] + "..."
         console.print(f"[dim]↳ Result ({name}):[/dim] [italic]{trimmed}[/italic]")
 
+    def render_formatted_code_blocks(self, response_text: str) -> None:
+        """Extracts code blocks from response and presents them in styled code panels with a top-right [📋 Copy] button."""
+        code_matches = re.findall(r"```([a-zA-Z0-9_\-\+]*)\n([\s\S]*?)\n?```", response_text)
+        if not code_matches:
+            return
+
+        self.last_code_blocks = [code.rstrip() for _, code in code_matches]
+        total_blocks = len(code_matches)
+
+        console.print()
+        for idx, (lang, raw_code) in enumerate(code_matches, 1):
+            code = raw_code.rstrip()
+            raw_lang = lang.strip() or "code"
+            copy_btn = f"[📋 Copy: /copy {idx}]" if total_blocks > 1 else "[📋 Copy: /copy]"
+            left_badge = f"💻 {raw_lang} (Block #{idx})" if total_blocks > 1 else f"💻 {raw_lang}"
+
+            panel_width = console.width
+            space_count = max(1, panel_width - cell_len(left_badge) - cell_len(copy_btn) - 8)
+
+            header_title = Text()
+            header_title.append(f" {left_badge} ", style="bold cyan")
+            header_title.append(" " * space_count)
+            header_title.append(f" {copy_btn} ", style="bold yellow")
+
+            syntax_lang = raw_lang.lower() if raw_lang.lower() in [
+                "python", "bash", "cpp", "c++", "c", "javascript", "js", "typescript", "ts", "json", "html", "css", "yaml", "sh", "sql", "markdown", "rust", "go"
+            ] else "python"
+            syntax = Syntax(code, syntax_lang, theme="monokai", line_numbers=True)
+
+            console.print(
+                Panel(
+                    syntax,
+                    title=header_title,
+                    title_align="left",
+                    box=box.ROUNDED,
+                    border_style="cyan",
+                    padding=(0, 1)
+                )
+            )
+
+        # Auto-copy primary block to clipboard and notify
+        copy_to_clipboard(self.last_code_blocks[0])
+        copy_hint = Text()
+        copy_hint.append("✓ Code automatically copied to clipboard! ", style="bold green")
+        if total_blocks > 1:
+            copy_hint.append(f"(Ready to paste with Ctrl+V. Use /copy 1..{total_blocks} for other blocks)", style="dim")
+        else:
+            copy_hint.append("(Ready to paste with Ctrl+V or use /copy)", style="dim")
+        console.print(copy_hint)
+        console.print()
+
     def handle_command(self, cmd: str) -> bool:
         """
         Processes built-in CLI commands.
@@ -236,7 +315,8 @@ class BrooCLI:
         Returns False if not a built-in command (pass to agent).
         """
         clean = cmd.strip()
-        first_token = clean.split()[0].lower() if clean else ""
+        tokens = clean.split()
+        first_token = tokens[0].lower() if tokens else ""
 
         if first_token in ("/exit", "/quit", "exit", "quit"):
             console.print("\n[bold cyan]Broo session ended. Goodbye![/bold cyan]")
@@ -256,32 +336,61 @@ class BrooCLI:
 
         if first_token == "/clear":
             self.engine.clear_session()
+            self.last_code_blocks = []
             console.clear()
             render_banner()
             console.print("[green]✓ Conversation memory cleared.[/green]\n")
             return True
 
+        if first_token == "/copy":
+            if not self.last_code_blocks:
+                console.print("[bold yellow]⚠️ No code blocks found in the latest response.[/bold yellow]\n")
+                return True
+
+            idx = 1
+            if len(tokens) > 1 and tokens[1].isdigit():
+                idx = int(tokens[1])
+
+            if 1 <= idx <= len(self.last_code_blocks):
+                code = self.last_code_blocks[idx - 1]
+                copy_to_clipboard(code)
+                label = f"Block #{idx}" if len(self.last_code_blocks) > 1 else "code block"
+                console.print(f"[bold green]✓ Copied {label} ({len(code)} characters) to clipboard![/bold green]\n")
+            else:
+                console.print(f"[bold red]✗ Invalid block index. Please choose between 1 and {len(self.last_code_blocks)}.[/bold red]\n")
+            return True
+
         return False
 
     def run_prompt(self, user_input: str) -> None:
-        """Processes a single prompt through the agent and streams the response."""
+        """Processes a single prompt through the agent and streams the response token by token."""
         full_response = ""
         try:
+            chunks = self.engine.chat(user_input)
+            
+            # Show status spinner until first token arrives
+            first_chunk = ""
             with console.status("[bold cyan]Broo is thinking...[/bold cyan]", spinner="dots"):
-                chunks = self.engine.chat(user_input)
                 try:
                     first_chunk = next(chunks)
-                    full_response += first_chunk
                 except StopIteration:
                     first_chunk = ""
 
+            console.print("\n[bold cyan]Broo[/bold cyan] [dim]>[/dim] ", end="")
+
             if first_chunk:
+                console.print(first_chunk, end="", markup=False, highlight=False)
+                full_response += first_chunk
+                
                 for chunk in chunks:
+                    console.print(chunk, end="", markup=False, highlight=False)
                     full_response += chunk
 
-            console.print()
-            console.print(Panel(Markdown(full_response), title="[bold cyan]Broo[/bold cyan]", border_style="dim cyan", box=box.ROUNDED))
-            console.print()
+            console.print("\n")
+
+            # If code blocks were generated, render styled code boxes with copy button
+            if "```" in full_response:
+                self.render_formatted_code_blocks(full_response)
         except Exception as e:
             console.print(f"\n[bold red]Error running agent:[/bold red] {str(e)}")
 

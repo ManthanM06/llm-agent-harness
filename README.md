@@ -103,6 +103,7 @@ broo "What files are in the working directory?"
 | `/help` | Display CLI commands manual and shortcuts |
 | `/skills` | Display all registered coding skills and triggers |
 | `/tools` | Display available system tools and permission requirements |
+| `/copy [n]` | Copy code block #n (or latest) to system clipboard |
 | `/clear` | Clear conversation memory and reset session |
 | `/exit`, `/quit` | Exit the Broo session |
 
@@ -129,6 +130,11 @@ Do you want to grant permission for this action? [y/N]:
 ```
 - Type `y` to allow the action.
 - Type `n` or press Enter to deny the action. Broo will adapt its response accordingly.
+
+### Real-Time Token Streaming & Code Copy Boxes
+- **Token-by-Token Streaming:** Responses stream live token-by-token directly to your terminal with real-time feedback so you never have to wait for large responses in silence.
+- **Top-Right Copy Button Icon:** Code blocks are framed in a rounded Monokai syntax-highlighted panel featuring a dedicated `[📋 Copy: /copy]` button in the top-right corner.
+- **Instant Clipboard Integration:** Generated code blocks are automatically copied to your system clipboard (ready for `Ctrl+V`). You can also copy any specific code block anytime using `/copy [block_number]`.
 
 ---
 

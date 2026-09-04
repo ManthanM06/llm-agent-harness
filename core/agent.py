@@ -104,7 +104,7 @@ class AgentEngine:
                 break
 
             self.available_tools = registry.get_all_tools()
-            response = ollama.chat(
+            response_stream = ollama.chat(
                 model=config.MODEL_NAME,
                 messages=self.memory.get_messages(),
                 tools=self.available_tools,
@@ -113,37 +113,56 @@ class AgentEngine:
                     "num_predict": config.NUM_PREDICT,
                     "temperature": config.TEMPERATURE
                 },
-                stream=False
+                stream=True
             )
 
-            message = response.get("message", {})
-            content = message.get("content", "") or ""
-            
-            raw_api_calls = message.get("tool_calls")
+            content = ""
             api_tool_calls = []
-            if raw_api_calls:
-                for call in raw_api_calls:
-                    if hasattr(call, "function"):
-                        name = call.function.name
-                        args = call.function.arguments
-                        if hasattr(args, "model_dump"):
-                            args = args.model_dump()
-                        elif isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except Exception:
-                                pass
-                    elif isinstance(call, dict) and "function" in call:
-                        name = call["function"]["name"]
-                        args = call["function"].get("arguments", {})
-                    else:
-                        continue
-                    api_tool_calls.append({
-                        "function": {
-                            "name": name,
-                            "arguments": args if isinstance(args, dict) else {}
-                        }
-                    })
+            is_streaming_to_caller = False
+
+            for chunk in response_stream:
+                msg = chunk.get("message", {})
+                token = msg.get("content", "") or ""
+                content += token
+
+                raw_api_calls = msg.get("tool_calls")
+                if raw_api_calls:
+                    for call in raw_api_calls:
+                        if hasattr(call, "function"):
+                            name = call.function.name
+                            args = call.function.arguments
+                            if hasattr(args, "model_dump"):
+                                args = args.model_dump()
+                            elif isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except Exception:
+                                    pass
+                        elif isinstance(call, dict) and "function" in call:
+                            name = call["function"]["name"]
+                            args = call["function"].get("arguments", {})
+                        else:
+                            continue
+                        api_tool_calls.append({
+                            "function": {
+                                "name": name,
+                                "arguments": args if isinstance(args, dict) else {}
+                            }
+                        })
+
+                if not is_streaming_to_caller and not api_tool_calls:
+                    stripped = content.lstrip()
+                    if stripped:
+                        # If beginning might be a codeblock, tag, or json, wait for a few chars to inspect
+                        if len(stripped) < 7 and (stripped.startswith("`") or stripped.startswith("<") or stripped.startswith("{") or stripped.startswith("[")):
+                            pass
+                        elif stripped.startswith(("{", "[", "```json", "<tool", "<function")):
+                            pass  # Buffer potential manual tool call
+                        else:
+                            is_streaming_to_caller = True
+                            yield content
+                elif is_streaming_to_caller:
+                    yield token
 
             manual_tool_calls = self._extract_manual_json_tools(content)
             all_tools_to_run = api_tool_calls if api_tool_calls else manual_tool_calls
@@ -196,12 +215,9 @@ class AgentEngine:
                 
             else:
                 self.memory.add_message("assistant", content)
-
-                # Stream response chunks to caller
-                chunk_size = 10
-                for i in range(0, len(content), chunk_size):
-                    yield content[i:i+chunk_size]
-                
+                if not is_streaming_to_caller:
+                    # Flush buffered content if it was not streamed yet
+                    yield content
                 break
                 
     def clear_session(self):
