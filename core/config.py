@@ -9,6 +9,7 @@ class AgentConfig:
     # Model params
     MODEL_NAME: str = "qwen2.5-coder:3b"
     NUM_CTX: int = 16384                # Expanded context window for code and tool interactions
+    NUM_PREDICT: int = 2048             # Cap tokens generated per turn to avoid runaway CPU loops
     TEMPERATURE: float = 0.2            # Low temp for deterministic tool calling
 
     # Context Management

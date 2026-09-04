@@ -110,6 +110,7 @@ class AgentEngine:
                 tools=self.available_tools,
                 options={
                     "num_ctx": config.NUM_CTX,
+                    "num_predict": config.NUM_PREDICT,
                     "temperature": config.TEMPERATURE
                 },
                 stream=False
