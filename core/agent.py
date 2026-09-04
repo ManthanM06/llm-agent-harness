@@ -34,7 +34,7 @@ class AgentEngine:
         if not text:
             return tools_found
 
-        decoder = json.JSONDecoder()
+        decoder = json.JSONDecoder(strict=False)
         pos = 0
         while pos < len(text):
             idx_obj = text.find("{", pos)
@@ -66,6 +66,26 @@ class AgentEngine:
                         })
             except Exception:
                 pos = idx + 1
+
+        # Regex fallback if JSONDecoder failed due to unescaped quotes inside code string literals
+        if not tools_found:
+            name_match = re.search(r'"name":\s*"([a-zA-Z0-9_]+)"', text)
+            if name_match:
+                func_name = name_match.group(1)
+                args = {}
+                fp_match = re.search(r'"file_path":\s*"([^"]+)"', text)
+                if fp_match:
+                    args["file_path"] = fp_match.group(1)
+                cnt_match = re.search(r'"content":\s*"([\s\S]*?)"\s*\}\s*\}', text)
+                if cnt_match:
+                    raw_cnt = cnt_match.group(1)
+                    args["content"] = raw_cnt.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "\t")
+                tools_found.append({
+                    "function": {
+                        "name": func_name,
+                        "arguments": args
+                    }
+                })
 
         return tools_found
 

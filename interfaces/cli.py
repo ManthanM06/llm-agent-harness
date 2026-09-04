@@ -19,7 +19,8 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.markdown import Markdown
+from rich.markdown import Markdown, CodeBlock
+from rich.live import Live
 from rich.text import Text
 from rich.syntax import Syntax
 from rich.prompt import Confirm
@@ -234,6 +235,47 @@ def cli_permission_handler(tool_name: str, arguments: Dict[str, Any]) -> bool:
         console.print("\n[bold red]✗ Action cancelled by user.[/bold red]")
         return False
 
+class BrooCodeBlock(CodeBlock):
+    """Custom code block renderer with line numbers and a top-right [📋 Copy] button badge."""
+    counter = 0
+
+    def __rich_console__(self, console: Console, options: Any):
+        code = str(self.text).rstrip()
+        raw_lang = (self.lexer_name or "code").lower()
+        BrooCodeBlock.counter += 1
+        idx = BrooCodeBlock.counter
+
+        copy_btn = f"[📋 Copy: /copy {idx}]" if idx > 1 else "[📋 Copy: /copy]"
+        left_badge = f"💻 {raw_lang}"
+
+        panel_width = options.max_width
+        space_count = max(1, panel_width - cell_len(left_badge) - cell_len(copy_btn) - 8)
+
+        header_title = Text()
+        header_title.append(f" {left_badge} ", style="bold cyan")
+        header_title.append(" " * space_count)
+        header_title.append(f" {copy_btn} ", style="bold yellow")
+
+        valid_langs = {
+            "python", "cpp", "c++", "c", "javascript", "js", "typescript", "ts",
+            "json", "html", "css", "yaml", "sh", "bash", "sql", "markdown", "rust", "go", "java"
+        }
+        syntax_lang = raw_lang if raw_lang in valid_langs else "text"
+
+        syntax = Syntax(code, syntax_lang, theme="monokai", line_numbers=True)
+        yield Panel(
+            syntax,
+            title=header_title,
+            title_align="left",
+            box=box.ROUNDED,
+            border_style="cyan",
+            padding=(0, 1)
+        )
+
+# Register custom renderer for all markdown code blocks
+Markdown.elements["fence"] = BrooCodeBlock
+Markdown.elements["code_block"] = BrooCodeBlock
+
 class BrooCLI:
     def __init__(self):
         self.engine = AgentEngine(
@@ -258,44 +300,13 @@ class BrooCLI:
         console.print(f"[dim]↳ Result ({name}):[/dim] [italic]{trimmed}[/italic]")
 
     def render_formatted_code_blocks(self, response_text: str) -> None:
-        """Extracts code blocks from response and presents them in styled code panels with a top-right [📋 Copy] button."""
+        """Extracts code blocks from response, auto-copies to clipboard, and displays notification."""
         code_matches = re.findall(r"```([a-zA-Z0-9_\-\+]*)\n([\s\S]*?)\n?```", response_text)
         if not code_matches:
             return
 
         self.last_code_blocks = [code.rstrip() for _, code in code_matches]
-        total_blocks = len(code_matches)
-
-        console.print()
-        for idx, (lang, raw_code) in enumerate(code_matches, 1):
-            code = raw_code.rstrip()
-            raw_lang = lang.strip() or "code"
-            copy_btn = f"[📋 Copy: /copy {idx}]" if total_blocks > 1 else "[📋 Copy: /copy]"
-            left_badge = f"💻 {raw_lang} (Block #{idx})" if total_blocks > 1 else f"💻 {raw_lang}"
-
-            panel_width = console.width
-            space_count = max(1, panel_width - cell_len(left_badge) - cell_len(copy_btn) - 8)
-
-            header_title = Text()
-            header_title.append(f" {left_badge} ", style="bold cyan")
-            header_title.append(" " * space_count)
-            header_title.append(f" {copy_btn} ", style="bold yellow")
-
-            syntax_lang = raw_lang.lower() if raw_lang.lower() in [
-                "python", "bash", "cpp", "c++", "c", "javascript", "js", "typescript", "ts", "json", "html", "css", "yaml", "sh", "sql", "markdown", "rust", "go"
-            ] else "python"
-            syntax = Syntax(code, syntax_lang, theme="monokai", line_numbers=True)
-
-            console.print(
-                Panel(
-                    syntax,
-                    title=header_title,
-                    title_align="left",
-                    box=box.ROUNDED,
-                    border_style="cyan",
-                    padding=(0, 1)
-                )
-            )
+        total_blocks = len(self.last_code_blocks)
 
         # Auto-copy primary block to clipboard and notify
         copy_to_clipboard(self.last_code_blocks[0])
@@ -363,7 +374,7 @@ class BrooCLI:
         return False
 
     def run_prompt(self, user_input: str) -> None:
-        """Processes a single prompt through the agent and streams the response token by token."""
+        """Processes a single prompt through the agent with live token streaming and styled markdown."""
         full_response = ""
         try:
             chunks = self.engine.chat(user_input)
@@ -376,19 +387,22 @@ class BrooCLI:
                 except StopIteration:
                     first_chunk = ""
 
-            console.print("\n[bold cyan]Broo[/bold cyan] [dim]>[/dim] ", end="")
+            if not first_chunk:
+                return
 
-            if first_chunk:
-                console.print(first_chunk, end="", markup=False, highlight=False)
-                full_response += first_chunk
-                
+            full_response += first_chunk
+            BrooCodeBlock.counter = 0
+
+            with Live(console=console, refresh_per_second=10) as live:
+                live.update(Panel(Markdown(full_response), title="[bold cyan]Broo[/bold cyan]", border_style="dim cyan", box=box.ROUNDED))
                 for chunk in chunks:
-                    console.print(chunk, end="", markup=False, highlight=False)
                     full_response += chunk
+                    BrooCodeBlock.counter = 0
+                    live.update(Panel(Markdown(full_response), title="[bold cyan]Broo[/bold cyan]", border_style="dim cyan", box=box.ROUNDED))
 
-            console.print("\n")
+            console.print()
 
-            # If code blocks were generated, render styled code boxes with copy button
+            # Register code blocks in self.last_code_blocks, copy to clipboard, and show notification
             if "```" in full_response:
                 self.render_formatted_code_blocks(full_response)
         except Exception as e:
